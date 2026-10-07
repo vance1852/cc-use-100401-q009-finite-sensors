@@ -25,7 +25,37 @@ CREATE TABLE IF NOT EXISTS lot_events(
 CREATE TABLE IF NOT EXISTS approvals(
  lot_id TEXT NOT NULL, reviewer TEXT NOT NULL, decision TEXT NOT NULL,
  reason TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(lot_id,reviewer));
+CREATE TABLE IF NOT EXISTS instrument_catalog(
+ instrument_id TEXT PRIMARY KEY, point_type TEXT NOT NULL,
+ frequency_min_hz TEXT NOT NULL, frequency_max_hz TEXT NOT NULL,
+ response_min TEXT NOT NULL, response_max TEXT NOT NULL, noise_max TEXT NOT NULL,
+ registered_by TEXT NOT NULL, registered_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS quarantine_records(
+ quarantine_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ measurement_id TEXT NOT NULL REFERENCES measurements(measurement_id),
+ lot_id TEXT NOT NULL, violation TEXT NOT NULL, rule_version TEXT NOT NULL,
+ reason TEXT NOT NULL, handled_by TEXT NOT NULL, handled_at TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('active','lifted')),
+ lifted_by TEXT, lifted_at TEXT, lift_reason TEXT);
 """
+
+
+def _migrate(db: sqlite3.Connection) -> None:
+    """为契约上线前已存在的库补充观测标识、内容摘要与索引。"""
+
+    columns = {row[1] for row in db.execute("PRAGMA table_info(measurements)")}
+    if "observation_key" not in columns:
+        db.execute("ALTER TABLE measurements ADD COLUMN observation_key TEXT")
+    if "content_sha256" not in columns:
+        db.execute("ALTER TABLE measurements ADD COLUMN content_sha256 TEXT")
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS measurements_observation_key "
+        "ON measurements(lot_id, observation_key) WHERE observation_key IS NOT NULL"
+    )
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS one_active_quarantine_per_measurement "
+        "ON quarantine_records(measurement_id) WHERE status='active'"
+    )
 
 
 def utcnow() -> str:
@@ -33,10 +63,13 @@ def utcnow() -> str:
 
 
 def connect(path: str = ":memory:") -> sqlite3.Connection:
-    db = sqlite3.connect(path)
+    # check_same_thread=False：ThreadingHTTPServer 在各请求线程中复用同一连接，
+    # 并发安全由 api.Handler 的锁保证。
+    db = sqlite3.connect(path, check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     db.executescript(SCHEMA)
+    _migrate(db)
     db.commit()
     return db
 

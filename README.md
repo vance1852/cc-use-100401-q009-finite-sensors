@@ -16,6 +16,10 @@
 - Python 3.11 或更高版本
 - 运行时仅使用 Python 标准库和 SQLite
 
+## 观测数值契约与隔离
+
+装备观测在写入测量表与事件流之前必须通过统一数值契约（`src/equipment_quality/contracts.py`，版本 `equipment-observation-contract/1`）：按测点类型与设备量程检查时间、频率、响应、噪声字段，拒绝 NaN、正负无穷、非数值字符串，以及同一观测标识下内容不一致的重放；单条与批量导入均为全有或全无，失败时不产生任何业务或审计记录，错误响应指出具体字段与规则。库中已存在的异常值可通过扫描接口识别并隔离，隔离记录保存处置人、原因与规则版本，分析与报告默认只使用仍然有效且可追溯来源的观测。
+
 ## 测试
 
     PYTHONPATH=src python3 -m unittest discover -s tests -v
