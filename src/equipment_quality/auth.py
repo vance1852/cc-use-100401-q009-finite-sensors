@@ -14,8 +14,8 @@ ROLES = {"operator", "engineer", "quality", "admin"}
 PERMISSIONS = {
     "operator": {"read", "measure"},
     "engineer": {"read", "measure", "analyze", "submit"},
-    "quality": {"read", "measure", "analyze", "approve", "release"},
-    "admin": {"read", "measure", "analyze", "submit", "approve", "release", "admin"},
+    "quality": {"read", "measure", "analyze", "approve", "release", "quarantine"},
+    "admin": {"read", "measure", "analyze", "submit", "approve", "release", "quarantine", "admin"},
 }
 
 

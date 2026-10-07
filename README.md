@@ -10,6 +10,22 @@
 - fixtures/：离线验收使用的评估协议与结构化观测；
 - tests/：领域规则、错误边界、事务、权限、HTTP API 和命令行验收测试。
 
+## 观测数值契约(equipment_quality)
+
+测点在写入测量表和事件流之前必须通过统一数值契约(src/equipment_quality/contracts.py,
+规则版本 `eq-numeric-contract-v1`):
+
+- 设备先注册测点类型和量程(POST /instruments),未注册设备的测点一律拒绝；
+- 时间必须是带时区的 ISO-8601 且不能晚于接收时间；频率、响应、噪声必须是有限数值,
+  NaN、正负无穷、布尔和非数值字符串都会被拒绝,并按设备量程做上下限检查；
+- 同一观测标识(measurement_id)内容一致的重放幂等返回,内容不一致的重放返回 409；
+- 单条和批量导入(POST /lots/{id}/measurements[/batch])要么全部生效,
+  要么不产生任何业务或审计记录；错误响应为 422 并逐条指出字段和规则；
+- 库中已存在的异常值通过 GET /lots/{id}/violations 识别,经
+  POST /measurements/{id}/quarantine 隔离(保存处置人、原因和规则版本),
+  POST /measurements/{id}/quarantine-release 解除,全部进入审计事件流；
+- 分析与报告默认只使用仍然有效且未被隔离的观测,并在结果中列出被排除的测点及原因。
+
 ## 环境
 
 - Linux

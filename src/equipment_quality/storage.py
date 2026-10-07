@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator
 
+from .contracts import measurement_digest
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS metric_batches(
@@ -25,6 +27,19 @@ CREATE TABLE IF NOT EXISTS lot_events(
 CREATE TABLE IF NOT EXISTS approvals(
  lot_id TEXT NOT NULL, reviewer TEXT NOT NULL, decision TEXT NOT NULL,
  reason TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(lot_id,reviewer));
+CREATE TABLE IF NOT EXISTS instruments(
+ instrument_id TEXT PRIMARY KEY, point_type TEXT NOT NULL,
+ frequency_min_hz REAL NOT NULL, frequency_max_hz REAL NOT NULL,
+ response_min REAL NOT NULL, response_max REAL NOT NULL, noise_max REAL NOT NULL,
+ registered_by TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS quarantines(
+ quarantine_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ measurement_id TEXT NOT NULL REFERENCES measurements(measurement_id),
+ lot_id TEXT NOT NULL, reason TEXT NOT NULL, rule_version TEXT NOT NULL,
+ status TEXT NOT NULL, handled_by TEXT NOT NULL, handled_at TEXT NOT NULL,
+ released_by TEXT, released_at TEXT, release_reason TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS quarantines_active
+ ON quarantines(measurement_id) WHERE status='active';
 """
 
 
@@ -32,11 +47,33 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _migrate(db: sqlite3.Connection) -> None:
+    """把既有数据库升级到当前结构,并回填观测内容摘要。"""
+
+    columns = {row[1] for row in db.execute("PRAGMA table_info(measurements)")}
+    if "content_sha256" not in columns:
+        db.execute("ALTER TABLE measurements ADD COLUMN content_sha256 TEXT")
+        rows = db.execute(
+            "SELECT measurement_id,instrument,measured_at,test_frequency_hz,response,noise "
+            "FROM measurements"
+        ).fetchall()
+        for row in rows:
+            db.execute(
+                "UPDATE measurements SET content_sha256=? WHERE measurement_id=?",
+                (
+                    measurement_digest(row[1], row[2], row[3], row[4], row[5]),
+                    row[0],
+                ),
+            )
+
+
 def connect(path: str = ":memory:") -> sqlite3.Connection:
-    db = sqlite3.connect(path)
+    # HTTP 服务在处理线程中使用连接,由 api 层的调度锁保证串行访问。
+    db = sqlite3.connect(path, check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     db.executescript(SCHEMA)
+    _migrate(db)
     db.commit()
     return db
 
@@ -53,4 +90,8 @@ def transaction(db: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 
 
 def event(db: sqlite3.Connection, lot_id: str, event_type: str, actor: str, payload: dict) -> None:
-    db.execute("INSERT INTO lot_events(lot_id,event_type,actor,payload,created_at) VALUES(?,?,?,?,?)", (lot_id, event_type, actor, json.dumps(payload, sort_keys=True), utcnow()))
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
+    db.execute(
+        "INSERT INTO lot_events(lot_id,event_type,actor,payload,created_at) VALUES(?,?,?,?,?)",
+        (lot_id, event_type, actor, text, utcnow()),
+    )
